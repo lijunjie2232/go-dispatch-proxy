@@ -11,7 +11,19 @@ The idea for this project came from [dispatch-proxy](https://github.com/Morhaus/
 
 ## Installation
 
+### Option 1: Manual Installation
 No installation required. Grab the latest binary for your platform from the [CI server](https://ci.appveyor.com/project/extremecoders-re/go-dispatch-proxy/build/artifacts) or from [releases](https://github.com/extremecoders-re/go-dispatch-proxy/releases) and start speeding up your internet connection!
+
+### Option 2: Automated Installation (Linux)
+For Linux systems, you can use the provided installation scripts:
+
+```bash
+# Install as system service
+sudo ./install.sh
+
+# Uninstall completely
+sudo ./uninstall.sh
+```
 
 [![Build status](https://ci.appveyor.com/api/projects/status/nll4hvpdjlfsp7mu?svg=true)](https://ci.appveyor.com/project/extremecoders-re/go-dispatch-proxy/build/artifacts)
 
@@ -19,24 +31,87 @@ No installation required. Grab the latest binary for your platform from the [CI 
 
 The example below are shown on Windows. The steps are similar for other platforms.
 
-### 1 - Load balance connections
+### Command Line Arguments
 
-The primary purpose of the tool is to combine multiple internet connections into one. For this we need to know the IP addresses of the interface we wish to combine. You can obtain the IP addresses using the `ipconfig` (`ip a` on linux) command. Alternatively run `go-dispatch-proxy -list`.
+```
+go-dispatch-proxy [OPTIONS] [LOAD_BALANCERS...]
+
+OPTIONS:
+  -lhost string     The host to listen for SOCKS connection (default "127.0.0.1")
+  -lport int        The local port to listen for SOCKS connection (default 8080)
+  -list             Shows the available network interfaces for dispatching
+  -tunnel           Use tunnelling mode (acts as a transparent load balancing proxy)
+  -device           Use network devices to dispatch connections by device name
+  -config string    Path to configuration file (YAML format, default "/etc/go-dispatch-proxy.yaml")
+  -quiet            Disable logs
+
+LOAD_BALANCERS: 
+  IP addresses or device names for load balancing
+  Format: IP[@contention_ratio] or device_name[@contention_ratio]
+```
+
+### Configuration File Format
+
+You can also use a YAML configuration file instead of command-line arguments:
+
+```yaml
+# Listen host and port for the SOCKS proxy server
+listen_host: "127.0.0.1"
+listen_port: 8080
+
+# Enable tunnel mode (acts as a transparent load balancing proxy)
+tunnel_mode: false
+
+# Disable logs
+quiet_mode: false
+
+# Use network devices to dispatch connections
+use_devices: false
+
+# List of load balancers
+load_balancers:
+  # Format 1: Using device@IP format (traditional way)
+  - address: "eth0@192.168.1.100"
+    cont_ratio: 2
+    
+  # Format 2: Using separate device field (recommended)
+  - device: "wlan1"
+    cont_ratio: 1
+
+  # Format 3: Just IP address (when not using devices)
+  - address: "192.168.1.102"
+    cont_ratio: 1
+```
+
+The configuration file is automatically loaded from `/etc/go-dispatch-proxy.yaml` if it exists. You can specify a different path using the `-config` argument.
+
+### 1 - List Available Network Interfaces
+
+First, you can list all available network interfaces to see what's available for load balancing:
 
 ```
 D:\>go-dispatch-proxy.exe -list
---- Listing the available adresses for dispatching
-[+] Mobile Broadband Connection , IPv4:10.81.201.18
-[+] Local Area Connection, IPv4:192.168.1.2
+--- Listing the available devices for dispatching
+[+] Device Ethernet: 192.168.1.100
+[+] Device Wi-Fi: 10.0.0.5
 ```
 
-Start `go-dispatch-proxy` specifying the IP addresses of the load balancers obtained in the previous step. Optionally, along with the IP address you may also provide the contention ratio(after the @ symbol). If no contention ratio is specified, it's assumed as 1.
+### 2 - Load Balance Connections Using Device Names
 
-### 2 - Load balance SSH tunnels
+You can now specify network interfaces by device name instead of IP addresses:
+
+```
+D:\>go-dispatch-proxy.exe -device Ethernet Wi-Fi
+[INFO] Load balancer 1: 192.168.1.100, contention ratio: 1
+[INFO] Load balancer 2: 10.0.0.5, contention ratio: 1
+[INFO] SOCKS server started at 127.0.0.1:8080
+```
+
+### 3 - Load Balance SSH Tunnels
 
 The tool can load balance multiple SSH tunnels. See Example 3 for usage.
 
-### Example 1
+### Example 1: Basic Usage with IP Addresses
 
 SOCKS proxy running on localhost at default port. Contention ratio is specified.
 ```
@@ -46,7 +121,7 @@ D:\>go-dispatch-proxy.exe 10.81.201.18@3 192.168.1.2@2
 [INFO] SOCKS server started at 127.0.0.1:8080
 ```
 
-### Example 2
+### Example 2: Custom Host and Port
 
 SOCKS proxy running on a different interface at a custom port. Contention ratio is not specified.
 
@@ -61,7 +136,7 @@ Out of 5 consecutive connections, the first 3 are routed to `10.81.201.18` and t
 
 Now change the proxy settings of your browser, download manager etc to point to the above address (eg `127.0.0.1:8080`). Be sure to add this as a SOCKS v5 proxy and NOT as a HTTP/S proxy.
 
-### Example 3
+### Example 3: Load Balancing SSH Tunnels
 
 The tool can be used to load balance multiple SSH tunnels. In this mode, go-dispatch-proxy acts as a transparent load balancing proxy. 
 
@@ -110,6 +185,45 @@ $ ./go-dispatch-proxy
 ```
 
 Tunnel mode doesn't require root privilege.
+
+## System Service Installation [NEW]
+
+On Linux systems, you can install go-dispatch-proxy as a systemd service:
+
+### Installation
+```bash
+sudo ./install.sh
+```
+
+This will:
+- Install the binary to `/usr/local/bin/`
+- Create a configuration file at `/etc/go-dispatch-proxy.yaml`
+- Set up a systemd service
+- Configure proper permissions and capabilities
+- Start the service automatically
+
+### Management
+```bash
+# Start service
+sudo systemctl start go-dispatch-proxy
+
+# Stop service
+sudo systemctl stop go-dispatch-proxy
+
+# Restart service
+sudo systemctl restart go-dispatch-proxy
+
+# Check status
+sudo systemctl status go-dispatch-proxy
+
+# View logs
+sudo journalctl -u go-dispatch-proxy -f
+```
+
+### Uninstallation
+```bash
+sudo ./uninstall.sh
+```
 
 ## Compiling (For Development)
 

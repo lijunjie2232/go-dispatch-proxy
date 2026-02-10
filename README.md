@@ -11,6 +11,14 @@ The idea for this project came from [dispatch-proxy](https://github.com/Morhaus/
 
 ## Installation
 
+### Build
+
+```shell
+git clone https://github.com/lijunjie2232/go-dispatch-proxy.git
+cd go-dispatch-proxy
+go build
+```
+
 ### Option 1: Manual Installation
 No installation required. Grab the latest binary for your platform from the [CI server](https://ci.appveyor.com/project/extremecoders-re/go-dispatch-proxy/build/artifacts) or from [releases](https://github.com/extremecoders-re/go-dispatch-proxy/releases) and start speeding up your internet connection!
 

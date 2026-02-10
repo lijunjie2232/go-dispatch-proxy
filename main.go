@@ -165,18 +165,22 @@ Detect the addresses which can  be used for dispatching in non-tunnelling mode.
 Alternate to ipconfig/ifconfig
 */
 func detect_interfaces() {
-	fmt.Println("--- Listing the available adresses for dispatching")
+	fmt.Println("--- Listing the available devices for dispatching")
 	ifaces, _ := net.Interfaces()
 
 	for _, iface := range ifaces {
 		if (iface.Flags&net.FlagUp == net.FlagUp) && (iface.Flags&net.FlagLoopback != net.FlagLoopback) {
 			addrs, _ := iface.Addrs()
+			iplist := []string{}
 			for _, addr := range addrs {
 				if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
 					if ipnet.IP.To4() != nil {
-						fmt.Printf("[+] %s, IPv4:%s\n", iface.Name, ipnet.IP.String())
+						iplist = append(iplist, ipnet.IP.String())
 					}
 				}
+			}
+			if len(iplist) > 0 {
+				fmt.Printf("[+] Device %s: %s\n", iface.Name, strings.Join(iplist, ", "))
 			}
 		}
 	}
@@ -207,70 +211,104 @@ func get_iface_from_ip(ip string) string {
 }
 
 /*
+Gets the IP addresses from interface name
+*/
+func lookup_interface(iface_name string) []string {
+	ifaces, _ := net.Interfaces()
+	ret := []string{}
+
+	for _, iface := range ifaces {
+		if iface.Name == iface_name {
+			if (iface.Flags&net.FlagUp == net.FlagUp) && (iface.Flags&net.FlagLoopback != net.FlagLoopback) {
+				addrs, _ := iface.Addrs()
+				for _, addr := range addrs {
+					if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+						if ipnet.IP.To4() != nil {
+							ret = append(ret, ipnet.IP.String())
+						}
+					}
+				}
+			}
+		}
+	}
+	return ret
+}
+
+/*
 Parses the command line arguements to obtain the list of load balancers
 */
-func parse_load_balancers(args []string, tunnel bool) {
+func parse_load_balancers(args []string, tunnel bool, use_devices bool) {
 	if len(args) == 0 {
 		log.Fatal("[FATAL] Please specify one or more load balancers")
 	}
 
-	lb_list = make([]load_balancer, flag.NArg())
+	lb_list = make([]load_balancer, 0)
 
-	for idx, a := range args {
+	for _, a := range args {
 		splitted := strings.Split(a, "@")
 		iface := ""
 		// IP address of a Fully Qualified Domain Name of the load balancer
-		var lb_ip_or_fqdn string
+		var lb_ip_or_fqdn []string
 		var lb_port int
 		var err error
 
-		if tunnel {
-			ip_or_fqdn_port := strings.Split(splitted[0], ":")
-			if len(ip_or_fqdn_port) != 2 {
-				log.Fatal("[FATAL] Invalid address specification ", splitted[0])
-				return
+		if use_devices {
+			lb_ip_or_fqdn = lookup_interface(splitted[0])
+			if len(lb_ip_or_fqdn) == 0 {
+				log.Fatal("[FATAL] No such device ", splitted[0])
 			}
-
-			lb_ip_or_fqdn = ip_or_fqdn_port[0]
-			lb_port, err = strconv.Atoi(ip_or_fqdn_port[1])
-			if err != nil || lb_port <= 0 || lb_port > 65535 {
-				log.Fatal("[FATAL] Invalid port ", splitted[0])
-				return
-			}
-
 		} else {
-			lb_ip_or_fqdn = splitted[0]
-			lb_port = 0
+			lb_ip_or_fqdn = []string{splitted[0]}
 		}
 
-		// FQDN not supported for tunnel modes
-		if !tunnel && net.ParseIP(lb_ip_or_fqdn).To4() == nil {
-			log.Fatal("[FATAL] Invalid address ", lb_ip_or_fqdn)
-		}
+		for idx, ip_or_fqdn := range lb_ip_or_fqdn {
+			if tunnel {
+				ip_or_fqdn_port := strings.Split(ip_or_fqdn, ":")
+				if len(ip_or_fqdn_port) != 2 {
+					log.Fatal("[FATAL] Invalid address specification ", ip_or_fqdn)
+					return
+				}
 
-		var cont_ratio int = 1
-		if len(splitted) > 1 {
-			cont_ratio, err = strconv.Atoi(splitted[1])
-			if err != nil || cont_ratio <= 0 {
-				log.Fatal("[FATAL] Invalid contention ratio for ", lb_ip_or_fqdn)
+				ip_or_fqdn = ip_or_fqdn_port[0]
+				lb_port, err = strconv.Atoi(ip_or_fqdn_port[1])
+				if err != nil || lb_port <= 0 || lb_port > 65535 {
+					log.Fatal("[FATAL] Invalid port ", ip_or_fqdn)
+					return
+				}
+
+			} else {
+				lb_port = 0
 			}
-		}
 
-		// Obtaining the interface name of the load balancer IP's doesn't make sense in tunnel mode
-		if !tunnel {
-			iface = get_iface_from_ip(lb_ip_or_fqdn)
-			if iface == "" {
-				log.Fatal("[FATAL] IP address not associated with an interface ", lb_ip_or_fqdn)
+			// FQDN not supported for tunnel modes
+			if !tunnel && net.ParseIP(ip_or_fqdn).To4() == nil {
+				log.Fatal("[FATAL] Invalid address ", ip_or_fqdn)
 			}
-		}
 
-		slbport := ""
-		if tunnel {
-			slbport = ":" + strconv.Itoa(lb_port)
-		}
+			var cont_ratio int = 1
+			if len(splitted) > 1 {
+				cont_ratio, err = strconv.Atoi(splitted[1])
+				if err != nil || cont_ratio <= 0 {
+					log.Fatal("[FATAL] Invalid contention ratio for ", ip_or_fqdn)
+				}
+			}
 
-		log.Printf("[INFO] Load balancer %d: %s%s, contention ratio: %d\n", idx+1, lb_ip_or_fqdn, slbport, cont_ratio)
-		lb_list[idx] = load_balancer{address: fmt.Sprintf("%s:%d", lb_ip_or_fqdn, lb_port), iface: iface, contention_ratio: cont_ratio, current_connections: 0}
+			// Obtaining the interface name of the load balancer IP's doesn't make sense in tunnel mode
+			if !tunnel {
+				iface = get_iface_from_ip(ip_or_fqdn)
+				if iface == "" {
+					log.Fatal("[FATAL] IP address not associated with an interface ", ip_or_fqdn)
+				}
+			}
+
+			slbport := ""
+			if tunnel {
+				slbport = ":" + strconv.Itoa(lb_port)
+			}
+
+			log.Printf("[INFO] Load balancer %d: %s%s, contention ratio: %d\n", idx+1, ip_or_fqdn, slbport, cont_ratio)
+			lb_list = append(lb_list, load_balancer{address: fmt.Sprintf("%s:%d", ip_or_fqdn, lb_port), iface: iface, contention_ratio: cont_ratio, current_connections: 0})
+		}
 	}
 }
 
@@ -283,6 +321,7 @@ func main() {
 	var detect = flag.Bool("list", false, "Shows the available addresses for dispatching (non-tunnelling mode only)")
 	var tunnel = flag.Bool("tunnel", false, "Use tunnelling mode (acts as a transparent load balancing proxy)")
 	var quiet = flag.Bool("quiet", false, "disable logs")
+	var use_devices = flag.Bool("device", false, "use network devices to dispatch connections")
 
 	flag.Parse()
 	if *detect {
@@ -304,7 +343,7 @@ func main() {
 	}
 
 	//Parse remaining string to get addresses of load balancers
-	parse_load_balancers(flag.Args(), *tunnel)
+	parse_load_balancers(flag.Args(), *tunnel, *use_devices)
 
 	local_bind_address := fmt.Sprintf("%s:%d", *lhost, *lport)
 

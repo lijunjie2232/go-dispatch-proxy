@@ -6,11 +6,12 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/big"
 	"net"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
-	"math/big"
 )
 
 type load_balancer struct {
@@ -81,7 +82,7 @@ func get_load_balancer(params ...interface{}) (*load_balancer, int) {
 		}
 	}
 	mutex.Unlock()
-	return lb,ilb
+	return lb, ilb
 }
 
 /*
@@ -313,6 +314,94 @@ func parse_load_balancers(args []string, tunnel bool, use_devices bool) {
 }
 
 /*
+Initialize load balancers from configuration
+*/
+func init_load_balancers_from_config(config *Config) {
+	lb_list = make([]load_balancer, 0)
+
+	for idx, lbConfig := range config.LoadBalancers {
+		// Handle device@IP format or separate device field
+		address := lbConfig.Address
+		device := lbConfig.Device
+
+		if device != "" {
+			// If device is specified, use device@IP format
+			address = device + "@" + address
+		}
+
+		splitted := strings.Split(address, "@")
+		iface := ""
+		var lb_ip_or_fqdn []string
+		var lb_port int
+		var err error
+
+		if config.UseDevices || device != "" || len(splitted) > 1 {
+			// Extract device name from either separate field or device@IP format
+			deviceName := device
+			if deviceName == "" && len(splitted) > 1 {
+				deviceName = splitted[0]
+			}
+
+			if deviceName != "" {
+				lb_ip_or_fqdn = lookup_interface(deviceName)
+				if len(lb_ip_or_fqdn) == 0 {
+					log.Fatal("[FATAL] No such device ", deviceName)
+				}
+			} else {
+				lb_ip_or_fqdn = []string{splitted[0]}
+			}
+		} else {
+			lb_ip_or_fqdn = []string{splitted[0]}
+		}
+
+		for _, ip_or_fqdn := range lb_ip_or_fqdn {
+			if config.TunnelMode {
+				ip_or_fqdn_port := strings.Split(ip_or_fqdn, ":")
+				if len(ip_or_fqdn_port) != 2 {
+					log.Fatal("[FATAL] Invalid address specification ", ip_or_fqdn)
+					return
+				}
+
+				ip_or_fqdn = ip_or_fqdn_port[0]
+				lb_port, err = strconv.Atoi(ip_or_fqdn_port[1])
+				if err != nil || lb_port <= 0 || lb_port > 65535 {
+					log.Fatal("[FATAL] Invalid port ", ip_or_fqdn)
+					return
+				}
+			} else {
+				lb_port = 0
+			}
+
+			// FQDN not supported for tunnel modes
+			if !config.TunnelMode && net.ParseIP(ip_or_fqdn).To4() == nil {
+				log.Fatal("[FATAL] Invalid address ", ip_or_fqdn)
+			}
+
+			cont_ratio := lbConfig.ContRatio
+			if cont_ratio <= 0 {
+				cont_ratio = 1
+			}
+
+			// Obtaining the interface name of the load balancer IP's doesn't make sense in tunnel mode
+			if !config.TunnelMode {
+				iface = get_iface_from_ip(ip_or_fqdn)
+				if iface == "" {
+					log.Fatal("[FATAL] IP address not associated with an interface ", ip_or_fqdn)
+				}
+			}
+
+			slbport := ""
+			if config.TunnelMode {
+				slbport = ":" + strconv.Itoa(lb_port)
+			}
+
+			log.Printf("[INFO] Load balancer %d: %s%s, contention ratio: %d\n", idx+1, ip_or_fqdn, slbport, cont_ratio)
+			lb_list = append(lb_list, load_balancer{address: fmt.Sprintf("%s:%d", ip_or_fqdn, lb_port), iface: iface, contention_ratio: cont_ratio, current_connections: 0})
+		}
+	}
+}
+
+/*
 Main function
 */
 func main() {
@@ -322,8 +411,10 @@ func main() {
 	var tunnel = flag.Bool("tunnel", false, "Use tunnelling mode (acts as a transparent load balancing proxy)")
 	var quiet = flag.Bool("quiet", false, "disable logs")
 	var use_devices = flag.Bool("device", false, "use network devices to dispatch connections")
+	var config_file = flag.String("config", "/etc/go-dispatch-proxy.yaml", "Path to configuration file (YAML format)")
 
 	flag.Parse()
+
 	if *detect {
 		detect_interfaces()
 		return
@@ -332,20 +423,61 @@ func main() {
 	// Disable timestamp in log messages
 	log.SetFlags(log.Flags() &^ (log.Ldate | log.Ltime))
 
-	// Check for valid IP
-	if net.ParseIP(*lhost).To4() == nil {
-		log.Fatal("[FATAL] Invalid host ", *lhost)
+	var final_lhost string
+	var final_lport int
+	var final_tunnel bool
+	var final_quiet bool
+
+	// Handle configuration file if specified
+	configPath := *config_file
+	if configPath == "/etc/go-dispatch-proxy.yaml" {
+		// Check if default config file exists
+		if _, err := os.Stat(configPath); os.IsNotExist(err) {
+			// Default config doesn't exist, fall back to command line args
+			configPath = ""
+		}
 	}
 
-	// Check for valid port
-	if *lport < 1 || *lport > 65535 {
-		log.Fatal("[FATAL] Invalid port ", *lport)
+	if configPath != "" {
+		log.Println("[INFO] Loading configuration from:", configPath)
+		config, err := LoadConfig(configPath)
+		if err != nil {
+			log.Fatal("[FATAL] Failed to load config file:", err)
+		}
+
+		// Validate configuration
+		ValidateConfig(config)
+
+		// Use config values
+		final_lhost = config.ListenHost
+		final_lport = config.ListenPort
+		final_tunnel = config.TunnelMode
+		final_quiet = config.QuietMode
+
+		// Initialize load balancers from config
+		init_load_balancers_from_config(config)
+	} else {
+		// Use command line arguments (backward compatibility)
+		// Check for valid IP
+		if net.ParseIP(*lhost).To4() == nil {
+			log.Fatal("[FATAL] Invalid host ", *lhost)
+		}
+
+		// Check for valid port
+		if *lport < 1 || *lport > 65535 {
+			log.Fatal("[FATAL] Invalid port ", *lport)
+		}
+
+		final_lhost = *lhost
+		final_lport = *lport
+		final_tunnel = *tunnel
+		final_quiet = *quiet
+
+		// Parse remaining string to get addresses of load balancers
+		parse_load_balancers(flag.Args(), *tunnel, *use_devices)
 	}
 
-	//Parse remaining string to get addresses of load balancers
-	parse_load_balancers(flag.Args(), *tunnel, *use_devices)
-
-	local_bind_address := fmt.Sprintf("%s:%d", *lhost, *lport)
+	local_bind_address := fmt.Sprintf("%s:%d", final_lhost, final_lport)
 
 	// Start local server
 	l, err := net.Listen("tcp4", local_bind_address)
@@ -355,7 +487,7 @@ func main() {
 	log.Println("[INFO] Local server started on ", local_bind_address)
 	defer l.Close()
 
-	if (*quiet) {
+	if final_quiet {
 		log.SetOutput(io.Discard)
 	}
 
@@ -365,7 +497,7 @@ func main() {
 		if err != nil {
 			log.Println("[WARN] Could not accept connection")
 		} else {
-			go handle_connection(conn, *tunnel)
+			go handle_connection(conn, final_tunnel)
 		}
 	}
 }

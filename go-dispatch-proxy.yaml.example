@@ -1,0 +1,36 @@
+# Sample configuration file for go-dispatch-proxy
+# This file demonstrates the YAML format for configuring the load balancer
+
+# Listen host and port for the SOCKS proxy server
+listen_host: "127.0.0.1"
+listen_port: 8080
+
+# Enable tunnel mode (acts as a transparent load balancing proxy)
+tunnel_mode: false
+
+# Disable logs
+quiet_mode: false
+
+# Use network devices to dispatch connections
+use_devices: false
+
+# List of load balancers
+load_balancers:
+  # Format 1: Using device@IP format (traditional way)
+  # - address: "eth0@192.168.1.100"
+  #   cont_ratio: 2
+    
+  # Format 2: Using separate device field (new approach)
+  - device: "eth0"
+    cont_ratio: 1
+
+  # Format 3: Just IP address (when not using devices)
+  # - address: "192.168.1.102"
+  #   cont_ratio: 1
+
+  # Example for tunnel mode (SOCKS5 proxies):
+  # - address: "127.0.0.1:1080"
+  #   cont_ratio: 1
+  #
+  # - address: "127.0.0.1:1081"
+  #   cont_ratio: 1

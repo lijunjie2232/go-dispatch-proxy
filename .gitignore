@@ -1,2 +1,4 @@
 # build file
 go-dispatch-proxy
+# config file
+go-dispatch-proxy.yaml
